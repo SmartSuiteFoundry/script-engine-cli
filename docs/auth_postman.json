@@ -1,0 +1,204 @@
+{
+	"info": {
+		"_postman_id": "a8f6d3f1-e5d1-4f1e-8a0a-3c12d7b4d5e6",
+		"name": "SmartSuite API Management",
+		"description": "A collection for creating and managing OAuth clients and API Keys for the Unified API First Framework.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Create OAuth Client",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// This script runs after the request is sent.",
+							"// It saves the new client_id and client_secret to collection variables.",
+							"if (pm.response.code === 201) {",
+							"    try {",
+							"        const requestBody = JSON.parse(pm.request.body.raw);",
+							"        pm.collectionVariables.set(\"clientId\", requestBody.client_id);",
+							"        pm.collectionVariables.set(\"clientSecret\", requestBody.client_secret);",
+							"        console.log(`Set clientId to: ${requestBody.client_id}`);",
+							"    } catch (e) {",
+							"        console.log(\"Could not parse request body or find client credentials.\");",
+							"    }",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"client_id\": \"{{$guid}}\",\n  \"client_secret\": \"{{$randomPassword}}\",\n  \"scope\": [\"read\", \"write\", \"admin\"],\n  \"principal\": \"test-principal-{{$randomInt}}\",\n  \"notes\": \"Test client created from Postman.\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/clients",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"clients"
+					]
+				},
+				"description": "Registers a new OAuth client. A successful request will automatically update the `clientId` and `clientSecret` collection variables."
+			},
+			"response": []
+		},
+		{
+			"name": "Get OAuth Token",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// This script runs after the request is sent.",
+							"// It saves the access_token to the adminToken variable, which automatically",
+							"// authorizes all other requests in this collection.",
+							"if (pm.response.code === 200) {",
+							"    try {",
+							"        const responseBody = pm.response.json();",
+							"        const accessToken = responseBody.access_token;",
+							"        if (accessToken) {",
+							"            pm.collectionVariables.set(\"adminToken\", accessToken);",
+							"            console.log(\"Set adminToken successfully.\");",
+							"        }",
+							"    } catch (e) {",
+							"        console.log(\"Could not parse response or find access_token.\");",
+							"    }",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "noauth"
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "urlencoded",
+					"urlencoded": [
+						{
+							"key": "grant_type",
+							"value": "client_credentials",
+							"type": "text"
+						},
+						{
+							"key": "client_id",
+							"value": "{{clientId}}",
+							"type": "text"
+						},
+						{
+							"key": "client_secret",
+							"value": "{{clientSecret}}",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{baseUrl}}/auth/token",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"auth",
+						"token"
+					]
+				},
+				"description": "Exchanges a Client ID and Secret for a Bearer Token using the Client Credentials flow. Note: This request uses `No Auth` because the credentials are in the request body."
+			},
+			"response": []
+		},
+		{
+			"name": "Generate API Key",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/clients/{{clientId}}/api-key",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"clients",
+						"{{clientId}}",
+						"api-key"
+					]
+				},
+				"description": "Generates a new, secure API key for an existing client and stores it as the `emerging` key."
+			},
+			"response": []
+		},
+		{
+			"name": "Rotate API Key",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/clients/{{clientId}}/api-key/rotate",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"clients",
+						"{{clientId}}",
+						"api-key",
+						"rotate"
+					]
+				},
+				"description": "Promotes the `emerging` key to be the `current` key, finalizing the rotation."
+			},
+			"response": []
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{adminToken}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://your-api-gateway-url.com/stage",
+			"type": "string",
+			"description": "The base URL for the deployed API Gateway stage."
+		},
+		{
+			"key": "adminToken",
+			"value": "your-admin-jwt-here",
+			"type": "string",
+			"description": "A valid JWT with 'admin' scope. This is updated automatically after a successful 'Get Token' request."
+		},
+		{
+			"key": "clientId",
+			"value": "your-client-id-here",
+			"type": "string",
+			"description": "The ID of the client to manage. This is updated automatically after a successful 'Create' request."
+		},
+		{
+			"key": "clientSecret",
+			"value": "your-client-secret-here",
+			"type": "string",
+			"description": "The secret of the client. This is updated automatically after a successful 'Create' request."
+		}
+	]
+}
+

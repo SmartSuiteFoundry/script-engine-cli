@@ -1,0 +1,881 @@
+openapi: 3.0.3
+info:
+  title: Script Management API
+  description: >
+    REST API for managing the lifecycle of customer-authored JavaScript scripts
+    in SmartSuite's Custom Script Integrations feature. Handles CRUD, validation,
+    secret management, scheduling, execution orchestration, and run history.
+  version: 1.0.0
+  contact:
+    name: SmartSuite Engineering
+
+servers:
+  - url: https://hotfix.ss-stage.com/v1/scripting/
+    description: API base path (hotfix)
+  - url: https://dev.ss-stage.com/v1/scripting/
+    description: API base path (dev)
+  - url: https://stage.ss-stage.com/v1/scripting/
+    description: API base path (stage)
+  - url: /v1/scripting/
+    description: API base path
+
+security:
+  - TokenAuth: []
+    AccountId: []
+
+paths:
+  /scripts:
+    post:
+      summary: Create a script
+      operationId: createScript
+      tags: [Scripts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptCreateRequest'
+      responses:
+        '201':
+          description: Script created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Script'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+    get:
+      summary: List scripts
+      operationId: listScripts
+      tags: [Scripts]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Page of scripts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /scripts/{scriptId}:
+    parameters:
+      - $ref: '#/components/parameters/ScriptId'
+
+    get:
+      summary: Get a script
+      operationId: getScript
+      tags: [Scripts]
+      responses:
+        '200':
+          description: Script details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Script'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    put:
+      summary: Update a script
+      operationId: updateScript
+      tags: [Scripts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptUpdateRequest'
+      responses:
+        '200':
+          description: Updated script
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Script'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    delete:
+      summary: Delete a script
+      operationId: deleteScript
+      tags: [Scripts]
+      responses:
+        '204':
+          description: Script deleted
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /scripts/{scriptId}/execute:
+    parameters:
+      - $ref: '#/components/parameters/ScriptId'
+
+    post:
+      summary: Execute a script
+      description: >
+        Executes a script synchronously (mode=sync, returns result inline) or
+        asynchronously (mode=async, returns run_id with status=pending).
+      operationId: executeScript
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '200':
+          description: Synchronous execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResult'
+        '202':
+          description: Async execution accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionResult'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/BusinessRuleError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /scripts/{scriptId}/runs:
+    parameters:
+      - $ref: '#/components/parameters/ScriptId'
+
+    get:
+      summary: List runs for a script
+      operationId: listRuns
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Page of runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunListResult'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /scripts/{scriptId}/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/ScriptId'
+      - $ref: '#/components/parameters/RunId'
+
+    get:
+      summary: Get a specific run
+      operationId: getRun
+      tags: [Runs]
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptRun'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /scripts/{scriptId}/runs/{runId}/logs:
+    parameters:
+      - $ref: '#/components/parameters/ScriptId'
+      - $ref: '#/components/parameters/RunId'
+
+    get:
+      summary: Get presigned URL for run logs
+      operationId: getRunLogs
+      tags: [Runs]
+      description: >
+        Returns a time-limited presigned S3 URL for downloading the run's log file.
+
+
+        If the run already has a consolidated log file (`logs_s3_key` is set), the URL
+        points to that file directly.
+
+
+        For timed-out runs where the Lambda was terminated before consolidating log
+        chunks, this endpoint performs on-demand consolidation: it discovers chunk
+        files under `logs/{workspace_id}/{run_id}/`, concatenates them in sequence
+        order, writes the consolidated file to `logs/{workspace_id}/{run_id}.log`,
+        updates the run record, and returns a presigned URL for the result.
+
+
+        Returns 404 if no logs are available (non-timed-out run without logs, or
+        timed-out run with no chunk files).
+      responses:
+        '200':
+          description: Presigned S3 URL for log download
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                    description: Presigned S3 URL (time-limited, 15 min expiry)
+                required:
+                  - url
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          description: >
+            Internal error during log consolidation (e.g. S3 ListObjects, GetObject,
+            or PutObject failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /internal/runs:
+    put:
+      summary: Update or create a run status (internal)
+      operationId: updateRunStatus
+      tags: [Internal]
+      description: >
+        Internal endpoint called by the Script Runner Lambda to report run status.
+        Uses upsert behavior: if run_id is provided in the request body, updates the
+        existing run. If run_id is absent, creates a new run and returns the generated ID.
+        Secured via IAM authentication. Does not require Account-Id header.
+      security:
+        - IAMAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunStatusUpdateRequest'
+      responses:
+        '200':
+          description: Run status updated (or created) successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStatusUpdateResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /runtimes:
+    get:
+      summary: List available runtimes
+      operationId: listRuntimes
+      tags: [Runtimes]
+      responses:
+        '200':
+          description: List of runtimes with pre-installed libraries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RuntimeInfo'
+
+  /runtimes/{runtime}/libraries:
+    parameters:
+      - name: runtime
+        in: path
+        required: true
+        schema:
+          type: string
+        example: nodejs20
+
+    get:
+      summary: List pre-installed libraries for a runtime
+      operationId: getRuntimeLibraries
+      tags: [Runtimes]
+      responses:
+        '200':
+          description: List of pre-installed libraries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LibraryInfo'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+components:
+  securitySchemes:
+    TokenAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "Authentication token. Format: ApiKey <your-token>"
+    AccountId:
+      type: apiKey
+      in: header
+      name: Account-Id
+      description: Required workspace/account identifier for scoping all operations
+    IAMAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: AWS IAM SigV4 authentication for internal service-to-service calls
+
+  parameters:
+    ScriptId:
+      name: scriptId
+      in: path
+      required: true
+      description: Human-readable script identifier (unique per workspace)
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+      example: my-data-sync
+
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: 550e8400-e29b-41d4-a716-446655440000
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor for pagination (from previous response's next_cursor)
+      schema:
+        type: string
+
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      description: Number of items per page (default 20, max 100)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    Script:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+        id:
+          type: string
+          description: Human-readable identifier
+        workspace_id:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+        runtime:
+          $ref: '#/components/schemas/RuntimeType'
+        script_hash:
+          type: string
+          description: SHA-256 hash of script content
+        script_version:
+          type: integer
+          description: Incremented on content changes
+        script_s3_key:
+          type: string
+        entry_point:
+          type: string
+          default: exports.handler
+        status:
+          $ref: '#/components/schemas/ScriptStatus'
+        memory_mb:
+          type: integer
+          minimum: 128
+          maximum: 1024
+        timeout_seconds:
+          type: integer
+          minimum: 5
+          maximum: 900
+        ephemeral_storage_mb:
+          type: integer
+        schedule:
+          type: string
+          nullable: true
+          description: Cron/rate expression or preset (hourly, daily, weekly)
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+          description: Key-value map of secret references (secret:// URIs)
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - uuid
+        - id
+        - workspace_id
+        - display_name
+        - runtime
+        - script_hash
+        - script_version
+        - script_s3_key
+        - entry_point
+        - status
+        - memory_mb
+        - timeout_seconds
+        - ephemeral_storage_mb
+        - secrets
+        - tags
+        - created_at
+        - updated_at
+
+    ScriptCreateRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+          description: Human-readable identifier (unique per workspace, 3-63 chars, lowercase alphanumeric and hyphens)
+        display_name:
+          type: string
+        description:
+          type: string
+        runtime:
+          $ref: '#/components/schemas/RuntimeType'
+        script_content:
+          type: string
+          format: byte
+          description: Base64-encoded script content (max 5 MB)
+        script_hash:
+          type: string
+          description: SHA-256 hash of the raw script content
+        entry_point:
+          type: string
+          default: exports.handler
+        memory_mb:
+          type: integer
+          minimum: 128
+          maximum: 1024
+          default: 256
+        timeout_seconds:
+          type: integer
+          minimum: 5
+          maximum: 900
+          default: 30
+        schedule:
+          type: string
+          description: Cron/rate expression or preset (hourly, daily, weekly)
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+          description: Raw credentials are auto-uploaded to Secrets Manager
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - id
+        - display_name
+        - runtime
+        - script_content
+        - script_hash
+
+    ScriptUpdateRequest:
+      type: object
+      description: All fields are optional. Only provided fields are updated.
+      properties:
+        display_name:
+          type: string
+        description:
+          type: string
+        script_content:
+          type: string
+          format: byte
+        script_hash:
+          type: string
+        entry_point:
+          type: string
+        memory_mb:
+          type: integer
+          minimum: 128
+          maximum: 1024
+        timeout_seconds:
+          type: integer
+          minimum: 5
+          maximum: 900
+        schedule:
+          type: string
+          nullable: true
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+
+    ScriptListResult:
+      type: object
+      properties:
+        scripts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Script'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page (null if last page)
+      required:
+        - scripts
+
+    ExecuteRequest:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/ExecMode'
+        payload:
+          type: object
+          description: Arbitrary JSON payload passed to the script handler
+        trigger_type:
+          $ref: '#/components/schemas/TriggerType'
+        caller_ip:
+          type: string
+      required:
+        - mode
+        - trigger_type
+
+    ExecutionResult:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: Run status (completed, failed, pending, etc.)
+        result:
+          type: object
+          description: Script return value (sync mode only)
+        duration:
+          type: integer
+          description: Execution duration in milliseconds (sync mode only)
+        error:
+          type: string
+          description: Error message if execution failed
+      required:
+        - run_id
+        - status
+
+    ScriptRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        script_id:
+          type: string
+        script_uuid:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+        trigger_type:
+          $ref: '#/components/schemas/TriggerType'
+        execution_mode:
+          $ref: '#/components/schemas/ExecMode'
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        script_version:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        result_summary:
+          type: object
+          nullable: true
+        logs_s3_key:
+          type: string
+          nullable: true
+        output_s3_key:
+          type: string
+          nullable: true
+        caller_ip:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - script_id
+        - script_uuid
+        - workspace_id
+        - trigger_type
+        - execution_mode
+        - status
+        - script_version
+        - started_at
+        - caller_ip
+        - created_at
+
+    RunListResult:
+      type: object
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScriptRun'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+        - runs
+
+    RunStatusUpdateRequest:
+      type: object
+      description: >
+        Request body for the internal run status upsert endpoint.
+        If run_id is provided, updates an existing run. If run_id is absent,
+        creates a new run and returns the generated ID in the response.
+      required:
+        - status
+      properties:
+        run_id:
+          type: string
+          format: uuid
+          description: >
+            Optional. If provided, updates an existing run. If absent, creates a new run
+            and returns the generated ID in the response.
+        status:
+          type: string
+          enum: [running, completed, failed, timed_out]
+          description: The new status for the run
+        duration_ms:
+          type: integer
+          description: Execution duration in milliseconds (for terminal statuses)
+        error:
+          type: string
+          description: Error message (for failed/timed_out statuses)
+        result_summary:
+          type: object
+          description: Structured result summary (for completed status)
+        logs_s3_key:
+          type: string
+          description: S3 key for execution logs
+        output_s3_key:
+          type: string
+          description: S3 key for execution output
+        workspace_id:
+          type: string
+          description: Required when creating a new run (run_id absent)
+        script_id:
+          type: string
+          description: Required when creating a new run (run_id absent)
+        script_uuid:
+          type: string
+          format: uuid
+          description: Required when creating a new run (run_id absent)
+        trigger_type:
+          type: string
+          enum: [http, scheduled, manual]
+          description: How the execution was triggered (defaults to manual)
+        execution_mode:
+          type: string
+          enum: [sync, async]
+          description: Execution mode (defaults to async)
+        script_version:
+          type: integer
+          description: Script version at time of execution
+        caller_ip:
+          type: string
+          description: IP address of the caller
+
+    RunStatusUpdateResponse:
+      type: object
+      properties:
+        run_id:
+          type: string
+          format: uuid
+          description: The run ID (generated if creating a new run)
+        status:
+          type: string
+          description: The current status after the update
+      required:
+        - run_id
+        - status
+
+    RuntimeInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: nodejs20
+        libraries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LibraryInfo'
+      required:
+        - name
+        - libraries
+
+    LibraryInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: axios
+        version:
+          type: string
+          example: 1.7.0
+      required:
+        - name
+        - version
+
+    RuntimeType:
+      type: string
+      description: >
+        Script execution runtime. Phase 1 supports nodejs20 only.
+        python3.12 is planned for Phase 2 and will be rejected by the API until then.
+      enum:
+        - nodejs20
+
+    ScriptStatus:
+      type: string
+      enum:
+        - active
+        - inactive
+        - validating
+        - failed_validation
+
+    RunStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - completed
+        - failed
+        - timed_out
+
+    TriggerType:
+      type: string
+      enum:
+        - http
+        - scheduled
+        - manual
+
+    ExecMode:
+      type: string
+      enum:
+        - sync
+        - async
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+          required:
+            - code
+            - message
+      required:
+        - error
+
+  responses:
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: VALIDATION_FAILED
+              message: "script ID must match pattern ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+              details: []
+
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: NOT_FOUND
+              message: "script not found"
+
+    ConflictError:
+      description: Resource conflict (duplicate)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: CONFLICT
+              message: "script with ID 'my-script' already exists"
+
+    BusinessRuleError:
+      description: Business rule violation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: BUSINESS_RULE_VIOLATION
+              message: "script is not active"
+
+    ServiceUnavailableError:
+      description: Workspace Lambda not ready
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: WORKSPACE_NOT_READY
+              message: "workspace Lambda is not active"
