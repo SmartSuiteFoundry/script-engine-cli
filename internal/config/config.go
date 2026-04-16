@@ -70,10 +70,14 @@ func Resolve(in Input) (Resolved, error) {
 	}
 
 	r := Resolved{ConfigPath: path}
+	fileTok, fileAPI := fileVals.Token, fileVals.APIKey
+	if kt, ka := SecretsFromKeyring(path); kt != "" || ka != "" {
+		fileTok, fileAPI = kt, ka
+	}
 	r.BaseURL = NormalizeScriptAPIBaseURL(firstNonEmpty(in.BaseURL, os.Getenv("SSE_BASE_URL"), fileVals.BaseURL))
 	r.AccountID = firstNonEmpty(in.AccountID, os.Getenv("SSE_ACCOUNT_ID"), fileVals.AccountID)
-	r.Token = firstNonEmpty(in.Token, os.Getenv("SSE_TOKEN"), fileVals.Token)
-	r.APIKey = firstNonEmpty(in.APIKey, os.Getenv("SSE_API_KEY"), fileVals.APIKey)
+	r.Token = firstNonEmpty(in.Token, os.Getenv("SSE_TOKEN"), fileTok)
+	r.APIKey = firstNonEmpty(in.APIKey, os.Getenv("SSE_API_KEY"), fileAPI)
 	r.Output = strings.TrimSpace(fileVals.Output)
 
 	if r.Token != "" && r.APIKey != "" {
@@ -153,10 +157,26 @@ func NormalizeScriptAPIBaseURL(base string) string {
 }
 
 // WriteFile writes config to path with mode 0600. Only non-empty fields are written.
+// Token and api_key are stored in the OS secret store when possible; the config file
+// then holds only base_url, account_id, and output. If the secret store fails, both
+// are written to the file (0600) and the error wraps ErrCredentialStoreFallback.
 func WriteFile(path string, f File) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	abs, err := filepath.Abs(path)
+	if err != nil {
 		return err
 	}
+	disk := fileForDisk(f, false)
+	if err := saveSecretsKeyring(abs, f.Token, f.APIKey); err != nil {
+		disk = fileForDisk(f, true)
+		if werr := writeConfigYAML(path, disk); werr != nil {
+			return werr
+		}
+		return fmt.Errorf("%w: %v", ErrCredentialStoreFallback, err)
+	}
+	return writeConfigYAML(path, disk)
+}
+
+func fileForDisk(f File, includeSecrets bool) File {
 	out := File{}
 	if f.BaseURL != "" {
 		out.BaseURL = f.BaseURL
@@ -164,14 +184,23 @@ func WriteFile(path string, f File) error {
 	if f.AccountID != "" {
 		out.AccountID = f.AccountID
 	}
-	if f.Token != "" {
-		out.Token = f.Token
-	}
-	if f.APIKey != "" {
-		out.APIKey = f.APIKey
+	if includeSecrets {
+		if f.Token != "" {
+			out.Token = f.Token
+		}
+		if f.APIKey != "" {
+			out.APIKey = f.APIKey
+		}
 	}
 	if f.Output != "" {
 		out.Output = f.Output
+	}
+	return out
+}
+
+func writeConfigYAML(path string, out File) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	data, err := yaml.Marshal(&out)
 	if err != nil {

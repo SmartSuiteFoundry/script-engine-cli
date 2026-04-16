@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -40,7 +41,7 @@ func runConfigure(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	f, err := config.ReadFile(path)
+	f, err := config.ReadMerged(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -130,7 +131,11 @@ func runConfigure(cmd *cobra.Command, args []string) error {
 	f.Output = out
 
 	if err := config.WriteFile(path, f); err != nil {
-		return err
+		if errors.Is(err, config.ErrCredentialStoreFallback) {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		} else {
+			return err
+		}
 	}
 
 	fmt.Fprintln(os.Stderr)

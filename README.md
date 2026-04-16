@@ -77,22 +77,40 @@ unless the value already starts with **`Bearer`** or **`ApiKey`** (case-insensit
 
 ## Configuration
 
-Precedence (**highest wins**): flags → environment → config file → defaults.
+Precedence (**highest wins**): flags → environment → stored credentials and file fields → defaults.
+
+For **`token`** / **`api_key`**, “stored credentials” means: if the OS secret store has an entry for your resolved config file path, that value is used **instead of** `token` / `api_key` lines in the YAML (so the keyring wins over stale plaintext until you save again). Otherwise the file is read as before.
 
 | Purpose | Flag | Environment variable | Config key |
 |---------|------|----------------------|------------|
 | API root URL | `--base-url` | `SSE_BASE_URL` | `base_url` |
 | Workspace id | `--account-id` | `SSE_ACCOUNT_ID` | `account_id` |
-| Primary secret | `--token` | `SSE_TOKEN` | `token` |
-| Alternate secret | `--api-key` | `SSE_API_KEY` | `api_key` |
+| Primary secret | `--token` | `SSE_TOKEN` | `token` (often stored outside the file; see below) |
+| Alternate secret | `--api-key` | `SSE_API_KEY` | `api_key` (often stored outside the file; see below) |
 | Config file | `--config` | `SSE_CONFIG` | — |
 | Default output (`json` / `pretty`) | `--output` | — | `output` (file only; used when `--output` is not passed) |
 
-Default config file: **`$XDG_CONFIG_HOME/sse/config.yaml`**, or **`~/.config/sse/config.yaml`**. Writes use mode **0600**.
+Default config file: **`$XDG_CONFIG_HOME/sse/config.yaml`**, or **`~/.config/sse/config.yaml`**. Non-secret fields and fallback secrets are written with mode **0600**.
+
+### Secrets storage (OS keyring)
+
+`sse configure` and `sse config set` try to keep **tokens and API keys out of the config file** by storing them in the platform secret service:
+
+| Platform | Store |
+|----------|--------|
+| macOS | Keychain |
+| Windows | Credential Manager |
+| Linux | Secret Service (DBus), e.g. **GNOME Keyring** / **KWallet** via **libsecret** |
+
+- **Service name in the store:** `sse-cli`.
+- **Scope:** entries are keyed to the **absolute path** of the config file in use, so different `--config` / `SSE_CONFIG` paths get separate credentials.
+- **`sse config get`** loads secrets from the store when present (masked unless `--show-secrets`).
+- **Migration:** existing plaintext `token` / `api_key` in YAML still work. The next successful save via **`sse configure`** or **`sse config set`** rewrites the file **without** those fields and copies the secret into the keyring when the store is available.
+- **Fallback:** if the secret store cannot be used (common on **minimal Linux** or **headless/CI** without a session bus), the CLI **writes secrets into the config file** (still **0600**) and prints a **warning** to stderr. For automation, prefer **`SSE_TOKEN`** / **`SSE_API_KEY`** so nothing is written to disk by those commands.
 
 ### Interactive configuration (`sse configure`)
 
-Similar to **`aws configure`**, this walks through prompts (with **Enter to keep** the value shown in brackets). **API keys and tokens are read with hidden input** when stdin is a TTY. It writes the same YAML file as `sse config set`. Requires an interactive terminal (not CI / not piped stdin); for automation use `sse config set` instead.
+Similar to **`aws configure`**, this walks through prompts (with **Enter to keep** the value shown in brackets). **API keys and tokens are read with hidden input** when stdin is a TTY. It updates the same config path as `sse config set`: non-secret fields go to YAML; secrets go to the **OS keyring** when possible (see **Secrets storage**). Requires an interactive terminal (not CI / not piped stdin); for automation use `sse config set` or environment variables instead.
 
 Prompts cover: **API base URL**, **Account-Id**, **authentication** (API key vs token), and **default output** (`json` or `pretty`). The default output is stored as config key **`output`** and used when you do **not** pass **`--output`** on the command line.
 
@@ -104,7 +122,7 @@ sse configure
 
 ```bash
 sse config path
-sse config get
+sse config get              # merges YAML with OS-stored secrets (masked by default)
 sse config get token --show-secrets
 sse config set base_url https://hotfix.ss-stage.com/v1/scripting
 sse config set account_id spyv9knb

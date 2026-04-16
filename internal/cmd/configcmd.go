@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -43,16 +44,17 @@ func configGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get [key]",
 		Short: "Print config values (keys: base_url, account_id, token, api_key, output)",
-		Long:  "Without key, prints all entries. Secrets are masked unless --show-secrets.",
+		Long:  "Without key, prints all entries. Secrets are masked unless --show-secrets. Credentials may be loaded from the OS secret store (see sse configure / sse config set) rather than the file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := Global.ConfigPath
-			f, err := config.ReadFile(path)
+			_, statErr := os.Stat(path)
+			f, err := config.ReadMerged(path)
 			if err != nil {
-				if os.IsNotExist(err) {
-					fmt.Fprintf(os.Stderr, "no config file at %s\n", path)
-					return nil
-				}
 				return err
+			}
+			if os.IsNotExist(statErr) && !configSnapshotNonEmpty(f) {
+				fmt.Fprintf(os.Stderr, "no config file at %s\n", path)
+				return nil
 			}
 			if len(args) == 0 {
 				printConfigFile(f, showSecrets)
@@ -63,6 +65,14 @@ func configGetCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "print token and api_key in full")
 	return cmd
+}
+
+func configSnapshotNonEmpty(f config.File) bool {
+	return strings.TrimSpace(f.BaseURL) != "" ||
+		strings.TrimSpace(f.AccountID) != "" ||
+		strings.TrimSpace(f.Token) != "" ||
+		strings.TrimSpace(f.APIKey) != "" ||
+		strings.TrimSpace(f.Output) != ""
 }
 
 func printConfigFile(f config.File, showSecrets bool) {
@@ -113,12 +123,12 @@ func printOneKey(key string, f config.File, showSecrets bool) error {
 func configSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
-		Short: "Set a config value and save the file (mode 0600)",
+		Short: "Set a config value and save (file mode 0600; secrets prefer OS secret store)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := Global.ConfigPath
 			f := config.File{}
-			if existing, err := config.ReadFile(path); err == nil {
+			if existing, err := config.ReadMerged(path); err == nil {
 				f = existing
 			} else if !os.IsNotExist(err) {
 				return err
@@ -146,7 +156,14 @@ func configSetCmd() *cobra.Command {
 			if f.Token != "" && f.APIKey != "" {
 				return fmt.Errorf("config cannot hold both token and api_key")
 			}
-			return config.WriteFile(path, f)
+			if err := config.WriteFile(path, f); err != nil {
+				if errors.Is(err, config.ErrCredentialStoreFallback) {
+					fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+					return nil
+				}
+				return err
+			}
+			return nil
 		},
 	}
 }
